@@ -1,0 +1,56 @@
+# Cisco Meraki Dashboard API credentials and scan configuration.
+# Copy this file to config.yaml and fill in your values.
+# NEVER commit config.yaml to version control.
+
+meraki:
+  # Dashboard API key. Create one under: My Profile -> API access.
+  # The key must belong to an admin with full (read) access to the orgs you scan.
+  api_key: "YOUR_MERAKI_DASHBOARD_API_KEY"
+
+  # Optional: pin a base URL (e.g. for Meraki China or GovCloud). Leave null for default.
+  base_url: null
+
+  # Optional: per-request timeout in seconds.
+  timeout: 60
+
+# Limit the scan to specific organization IDs. Leave empty to scan all orgs
+# the API key can see.
+organizations: []
+
+# Limit the scan to specific network IDs. Leave empty to scan every network.
+networks: []
+
+# Check IDs to skip (e.g. ["ORG-002", "MR-005"]).
+skip_checks: []
+
+# Check IDs to run exclusively. When set, everything else is skipped.
+only_checks: []
+
+# Output directory for JSON and CSV reports.
+output_dir: "./reports"
+
+# Formats to emit. Any combination of: console, json, csv.
+formats:
+  - console
+  - json
+  - csv
+
+# Tunables consumed by individual checks.
+thresholds:
+  # Flag admins inactive for longer than this many days.
+  admin_inactive_days: 90
+  # Flag API keys whose owning admin hasn't used the dashboard in this many days.
+  api_key_stale_days: 90
+  # Flag firmware that is more than this many versions behind "stable".
+  firmware_versions_behind: 2
+  # Minimum acceptable wireless data rate (Mbps) for enterprise SSIDs.
+  min_wireless_bitrate_mbps: 12
+
+  # --- Australian / ISM-specific tunables ---
+  # If set, ORG-010 fails any org whose dashboard region doesn't match.
+  # Valid values match Meraki's cloud.region.name, e.g. "Australia", "United States",
+  # "United Kingdom", "Europe", "Canada", "India", "China". Leave null to skip.
+  required_dashboard_region: null
+  # NET-006 fails networks with no time zone set; warns if it doesn't start with this prefix.
+  # Example: "Australia/" to require AU time zones. Leave null to only require "set".
+  required_timezone_prefix: null

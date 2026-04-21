@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meraki-sec"
+version = "0.1.0"
+description = "Evaluate a Cisco Meraki organization against Cisco and CIS security best practices"
+requires-python = ">=3.10"
+dependencies = [
+    "meraki>=1.47.0",
+    "PyYAML>=6.0",
+    "rich>=13.7",
+]
+
+[project.scripts]
+meraki-sec = "meraki_sec.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
