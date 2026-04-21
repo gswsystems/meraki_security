@@ -175,9 +175,25 @@ class MerakiClient:
 
     @lru_cache(maxsize=512)
     def appliance_client_vpn(self, network_id: str) -> dict | None:
-        return self._call(
-            self.dashboard.appliance.getNetworkApplianceClientVpnSettings, network_id
+        fn = getattr(
+            self.dashboard.appliance, "getNetworkApplianceClientVpnSettings", None
         )
+        if fn is not None:
+            return self._call(fn, network_id)
+        # SDK >= 2.2 dropped the convenience method; fall back to raw REST.
+        import urllib.parse
+        metadata = {
+            "tags": ["appliance", "configure", "clientVpn", "settings"],
+            "operation": "getNetworkApplianceClientVpnSettings",
+        }
+        resource = f"/networks/{urllib.parse.quote(network_id, safe='')}/appliance/clientVpn/settings"
+        try:
+            return self.dashboard._session.get(metadata, resource)
+        except meraki.APIError as e:
+            if getattr(e, "status", None) in (404, 400):
+                log.debug("API clientVpn settings -> %s: %s", e.status, e.message)
+                return None
+            raise APIError(f"clientVpn settings failed: {e}") from e
 
     @lru_cache(maxsize=512)
     def appliance_site_to_site_vpn(self, network_id: str) -> dict | None:

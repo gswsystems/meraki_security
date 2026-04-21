@@ -63,10 +63,24 @@ class Engine:
         org_ids: list[str] | None = None,
         network_ids: list[str] | None = None,
     ) -> list[Finding]:
-        orgs = self.client.organizations()
+        all_orgs = self.client.organizations()
         if org_ids:
             wanted = set(org_ids)
-            orgs = [o for o in orgs if o.get("id") in wanted]
+            orgs = [
+                o for o in all_orgs
+                if o.get("id") in wanted or o.get("name") in wanted
+            ]
+            missing = wanted - {o.get("id") for o in orgs} - {o.get("name") for o in orgs}
+            if missing:
+                available = ", ".join(
+                    f"{o.get('id')} ({o.get('name')})" for o in all_orgs
+                ) or "<none visible to this API key>"
+                log.warning(
+                    "Requested org(s) not found: %s. Available: %s",
+                    ", ".join(sorted(missing)), available,
+                )
+        else:
+            orgs = all_orgs
         if not orgs:
             log.warning("No organizations resolved — nothing to scan.")
             return []
