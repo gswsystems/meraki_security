@@ -7,7 +7,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from meraki_sec.models import Finding, Severity, Status
+from meraki_sec.models import Finding, Scope, Severity, Status
 from meraki_sec.reporters.summary import compute_summary
 
 
@@ -60,19 +60,37 @@ def render(findings: list[Finding]) -> None:
             )
         console.print(fw_table)
 
-    # Group findings: only show FAIL/WARN in the main table.
+    # Group findings by target (org → network → device); only FAIL/WARN.
     actionable = [f for f in findings if f.status in (Status.FAIL, Status.WARN)]
     if actionable:
-        table = Table(title="Findings", header_style="bold")
+        table = Table(title="Findings (grouped by target)", header_style="bold")
         table.add_column("ID", no_wrap=True)
         table.add_column("Sev", no_wrap=True)
         table.add_column("Status", no_wrap=True)
         table.add_column("Target")
         table.add_column("Finding")
-        for f in sorted(
-            actionable,
-            key=lambda x: (-_priority(x), x.check_id, x.target.label()),
-        ):
+        scope_order = {Scope.ORG: 0, Scope.NETWORK: 1, Scope.DEVICE: 2}
+
+        def _target_sort_key(f: Finding):
+            t = f.target
+            return (
+                t.org_name or "",
+                scope_order.get(t.scope, 99),
+                t.network_name or "",
+                t.device_name or t.device_serial or "",
+                -_priority(f),
+                f.check_id,
+            )
+
+        def _target_group(f: Finding):
+            t = f.target
+            return (t.org_name, t.network_name, t.device_name or t.device_serial)
+
+        prev_group = None
+        for f in sorted(actionable, key=_target_sort_key):
+            cur = _target_group(f)
+            if prev_group is not None and cur != prev_group:
+                table.add_section()
             table.add_row(
                 f.check_id,
                 Text(f.severity.value, style=_SEVERITY_STYLE[f.severity]),
@@ -80,6 +98,7 @@ def render(findings: list[Finding]) -> None:
                 f.target.label(),
                 f.message,
             )
+            prev_group = cur
         console.print(table)
     else:
         console.print("[green]No failing or warning findings.[/green]")
@@ -88,7 +107,7 @@ def render(findings: list[Finding]) -> None:
     by_id: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for f in findings:
         by_id[f.check_id][f.status.value] += 1
-    stats = Table(title="Check coverage", header_style="bold")
+    stats = Table(title="Check coverage (per check ID)", header_style="bold")
     stats.add_column("Check")
     for col in ("pass", "fail", "warn", "error", "n/a"):
         stats.add_column(col)
@@ -96,6 +115,36 @@ def render(findings: list[Finding]) -> None:
         row = [check_id] + [str(by_id[check_id].get(c, 0)) for c in ("pass", "fail", "warn", "error", "n/a")]
         stats.add_row(*row)
     console.print(stats)
+
+    # Per-device coverage: only findings whose target is a specific device.
+    by_dev: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for f in findings:
+        if f.target.scope != Scope.DEVICE:
+            continue
+        key = (f.target.device_serial or "", f.target.device_name or "")
+        by_dev[key][f.status.value] += 1
+    if by_dev:
+        dev_table = Table(title="Device coverage (per device)", header_style="bold")
+        dev_table.add_column("Device")
+        dev_table.add_column("Serial", no_wrap=True)
+        for col in ("pass", "fail", "warn", "error", "n/a"):
+            dev_table.add_column(col, justify="right")
+        # Sort: most fail/warn first, then by name.
+        def _dev_key(item):
+            (serial, name), counts = item
+            severity_total = counts.get("fail", 0) + counts.get("warn", 0)
+            return (-severity_total, name or serial)
+        for (serial, name), counts in sorted(by_dev.items(), key=_dev_key):
+            row = [name or "-", serial or "-"] + [
+                str(counts.get(c, 0)) for c in ("pass", "fail", "warn", "error", "n/a")
+            ]
+            dev_table.add_row(*row)
+        console.print(dev_table)
+    else:
+        console.print(
+            "[dim]No device-scope findings — only switches (MS-003/005) "
+            "and cameras (MV-001/002) currently have per-device checks.[/dim]"
+        )
 
 
 def _priority(f: Finding) -> int:

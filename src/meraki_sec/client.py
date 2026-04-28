@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections import deque
 from functools import lru_cache
+from threading import Lock
 from typing import Any
 
 import meraki
@@ -13,6 +16,31 @@ class APIError(Exception):
     """Raised when an API call fails in a way the caller should handle."""
 
 
+class RateLimiter:
+    """Sliding-window rate limiter: at most N acquisitions per second."""
+
+    def __init__(self, max_per_second: float | None):
+        self.max_per_second = max_per_second
+        self._times: deque[float] = deque()
+        self._lock = Lock()
+
+    def acquire(self) -> None:
+        if not self.max_per_second or self.max_per_second <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            while self._times and now - self._times[0] >= 1.0:
+                self._times.popleft()
+            if len(self._times) >= self.max_per_second:
+                wait = 1.0 - (now - self._times[0])
+                if wait > 0:
+                    time.sleep(wait)
+                    now = time.monotonic()
+                    while self._times and now - self._times[0] >= 1.0:
+                        self._times.popleft()
+            self._times.append(time.monotonic())
+
+
 class MerakiClient:
     """Thin wrapper around the official Meraki SDK with per-endpoint caching.
 
@@ -21,7 +49,13 @@ class MerakiClient:
     noticeably faster.
     """
 
-    def __init__(self, api_key: str, base_url: str | None = None, timeout: int = 60):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str | None = None,
+        timeout: int = 60,
+        max_requests_per_second: float | None = None,
+    ):
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "suppress_logging": True,
@@ -34,10 +68,12 @@ class MerakiClient:
         if base_url:
             kwargs["base_url"] = base_url
         self.dashboard = meraki.DashboardAPI(**kwargs)
+        self.rate_limiter = RateLimiter(max_requests_per_second)
 
     # ----- helpers -----
 
     def _call(self, fn, *args, **kwargs) -> Any:
+        self.rate_limiter.acquire()
         try:
             return fn(*args, **kwargs)
         except meraki.APIError as e:
@@ -187,6 +223,7 @@ class MerakiClient:
             "operation": "getNetworkApplianceClientVpnSettings",
         }
         resource = f"/networks/{urllib.parse.quote(network_id, safe='')}/appliance/clientVpn/settings"
+        self.rate_limiter.acquire()
         try:
             return self.dashboard._session.get(metadata, resource)
         except meraki.APIError as e:

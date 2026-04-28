@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 from meraki_sec import __version__
 from meraki_sec import checks  # noqa: F401 — populates the registry
 from meraki_sec.client import MerakiClient
 from meraki_sec.config import Config
-from meraki_sec.engine import Engine
+from meraki_sec.engine import Engine, device_product_type
 from meraki_sec.reporters import console as console_reporter
 from meraki_sec.reporters import csv_report, json_report
 
@@ -27,7 +28,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", action="append", default=[], choices=["console", "json", "csv"],
                    help="Output format (repeatable). Overrides config.")
     p.add_argument("--output-dir", default=None, help="Directory for JSON/CSV output. Overrides config.")
+    p.add_argument("--rate-limit", type=float, default=None, metavar="RPS",
+                   help="Cap API requests per second. Overrides config.")
+    p.add_argument("--sample", type=int, default=None, metavar="N",
+                   help="Sample at most N devices of each product type per org. Overrides config.")
+    p.add_argument("--sample-type", action="append", default=[], metavar="TYPE=N",
+                   help="Per-product-type sample limit, e.g. --sample-type wireless=10 (repeatable).")
     p.add_argument("--list-checks", action="store_true", help="Print all known checks and exit.")
+    p.add_argument("--device-overview", action="store_true",
+                   help="Print device-type counts per organization and exit.")
     p.add_argument("-v", "--verbose", action="count", default=0, help="-v for INFO, -vv for DEBUG.")
     p.add_argument("--version", action="version", version=f"meraki-sec {__version__}")
     return p
@@ -54,6 +63,72 @@ def _list_checks() -> None:
             print(f"           {framework}: {', '.join(refs)}")
 
 
+def _parse_sample_types(items: list[str]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for item in items:
+        if "=" not in item:
+            raise ValueError(f"--sample-type expects TYPE=N, got: {item!r}")
+        ptype, _, n = item.partition("=")
+        ptype = ptype.strip().lower()
+        if not ptype or not n.strip():
+            raise ValueError(f"--sample-type expects TYPE=N, got: {item!r}")
+        out[ptype] = int(n)
+    return out
+
+
+def _show_device_overview(client: MerakiClient, org_filters: list[str]) -> None:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    all_orgs = client.organizations()
+    if org_filters:
+        wanted = {str(x) for x in org_filters}
+        orgs = [o for o in all_orgs if str(o.get("id")) in wanted or o.get("name") in wanted]
+    else:
+        orgs = all_orgs
+
+    if not orgs:
+        console.print("[yellow]No organizations resolved.[/yellow]")
+        return
+
+    grand_totals: dict[str, int] = defaultdict(int)
+    for org in orgs:
+        try:
+            devs = client.org_devices(org["id"])
+        except Exception as e:
+            console.print(f"[red]Failed to load devices for {org.get('name')}: {e}[/red]")
+            continue
+
+        counts: dict[str, int] = defaultdict(int)
+        for d in devs:
+            ptype = device_product_type(d) or "unknown"
+            counts[ptype] += 1
+            grand_totals[ptype] += 1
+
+        table = Table(
+            title=f"Device overview: {org.get('name')} ({org.get('id')})",
+            header_style="bold",
+        )
+        table.add_column("Product type")
+        table.add_column("Count", justify="right")
+        for ptype in sorted(counts):
+            table.add_row(ptype, str(counts[ptype]))
+        table.add_row("[bold]Total[/bold]", f"[bold]{len(devs)}[/bold]")
+        console.print(table)
+
+    if len(orgs) > 1 and grand_totals:
+        table = Table(title="Device overview: all selected orgs", header_style="bold")
+        table.add_column("Product type")
+        table.add_column("Count", justify="right")
+        total = 0
+        for ptype in sorted(grand_totals):
+            table.add_row(ptype, str(grand_totals[ptype]))
+            total += grand_totals[ptype]
+        table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
+        console.print(table)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     _configure_logging(args.verbose)
@@ -77,6 +152,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error loading {config_path}: {e}", file=sys.stderr)
         return 2
 
+    try:
+        cli_sample_types = _parse_sample_types(args.sample_type)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
     # CLI flags override config.
     org_ids = args.org_id or cfg.organizations
     network_ids = args.network_id or cfg.networks
@@ -84,18 +165,28 @@ def main(argv: list[str] | None = None) -> int:
     skip = args.skip or cfg.skip_checks
     formats = args.format or cfg.formats
     output_dir = Path(args.output_dir) if args.output_dir else cfg.output_dir
+    rate_limit = args.rate_limit if args.rate_limit is not None else cfg.meraki.max_requests_per_second
+    sample_per_type = args.sample if args.sample is not None else cfg.device_sample_per_type
+    sample_map = {**cfg.device_sample, **cli_sample_types}
 
     client = MerakiClient(
         api_key=cfg.meraki.api_key,
         base_url=cfg.meraki.base_url,
         timeout=cfg.meraki.timeout,
+        max_requests_per_second=rate_limit,
     )
+
+    if args.device_overview:
+        _show_device_overview(client, org_ids)
+        return 0
 
     engine = Engine(
         client=client,
         thresholds=cfg.thresholds,
         only_checks=only,
         skip_checks=skip,
+        device_sample_per_type=sample_per_type,
+        device_sample=sample_map,
     )
 
     findings = engine.run(org_ids=org_ids or None, network_ids=network_ids or None)

@@ -13,6 +13,12 @@ meraki:
   # Optional: per-request timeout in seconds.
   timeout: 60
 
+  # Optional: cap on outbound API requests per second. The Meraki SDK already
+  # backs off on 429s, but this lets you stay well under your shared-org quota
+  # so you don't starve other tools/operators sharing the same API key.
+  # Leave null for unlimited (default).
+  max_requests_per_second: null
+
 # Limit the scan to specific organization IDs. Leave empty to scan all orgs
 # the API key can see.
 organizations: []
@@ -25,6 +31,20 @@ skip_checks: []
 
 # Check IDs to run exclusively. When set, everything else is skipped.
 only_checks: []
+
+# Device sampling: scan only a subset of each product type per org.
+# Useful for very large estates where scanning every device is too slow
+# or burns too much of the API budget.
+# `device_sample_per_type` applies to all product types unless overridden in
+# `device_sample`. Set either to null/0 to scan everything (default).
+# Valid product type keys: appliance, wireless, switch, camera, sensor.
+device_sample_per_type: null
+device_sample:
+  # appliance: 5
+  # wireless: 10
+  # switch: 5
+  # camera: 2
+  # sensor: 2
 
 # Output directory for JSON and CSV reports.
 output_dir: "./reports"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from typing import Iterable
 
 from meraki_sec.checks.base import REGISTRY, Check, CheckContext
@@ -8,6 +9,30 @@ from meraki_sec.client import APIError, MerakiClient
 from meraki_sec.models import Finding, Scope, Severity, Status, Target
 
 log = logging.getLogger(__name__)
+
+
+# Model-prefix → productType. Some Meraki endpoints omit `productType` on the
+# device payload, so we fall back to the model code.
+_MODEL_PREFIX_PRODUCT: dict[str, str] = {
+    "MX": "appliance", "MZ": "appliance", "Z": "appliance",
+    "MS": "switch", "CS": "switch",
+    "MR": "wireless", "CW": "wireless",
+    "MV": "camera",
+    "MT": "sensor",
+    "MG": "cellularGateway",
+}
+
+
+def device_product_type(device: dict) -> str:
+    """Best-effort productType for a device, falling back to model prefix."""
+    pt = (device.get("productType") or "").strip().lower()
+    if pt:
+        return pt
+    model = (device.get("model") or "").upper()
+    for prefix, ptype in _MODEL_PREFIX_PRODUCT.items():
+        if model.startswith(prefix):
+            return ptype
+    return ""
 
 
 def _network_products(network: dict) -> set[str]:
@@ -51,11 +76,48 @@ class Engine:
         *,
         only_checks: list[str] | None = None,
         skip_checks: list[str] | None = None,
+        device_sample_per_type: int | None = None,
+        device_sample: dict[str, int] | None = None,
     ):
         self.client = client
         self.thresholds = thresholds
         self.only = only_checks or []
         self.skip = skip_checks or []
+        self.device_sample_per_type = device_sample_per_type
+        self.device_sample = {k.lower(): v for k, v in (device_sample or {}).items()}
+
+    def _sampled_serials(self, org_id: str) -> set[str] | None:
+        """Build the set of device serials that should be scanned for this org.
+
+        Returns None if no sampling is configured (scan everything).
+        """
+        if not self.device_sample_per_type and not self.device_sample:
+            return None
+        try:
+            all_devs = self.client.org_devices(org_id)
+        except APIError as e:
+            log.warning("org %s: cannot list devices for sampling: %s", org_id, e)
+            return None
+        by_type: dict[str, list[dict]] = defaultdict(list)
+        for d in all_devs:
+            by_type[device_product_type(d)].append(d)
+        allowed: set[str] = set()
+        for ptype, devs in by_type.items():
+            limit = self.device_sample.get(ptype, self.device_sample_per_type)
+            if limit is None or limit <= 0:
+                kept = devs
+            else:
+                kept = devs[:limit]
+            if limit is not None and limit > 0 and len(devs) > limit:
+                log.info(
+                    "org %s: sampling %d/%d %s devices",
+                    org_id, limit, len(devs), ptype or "unknown",
+                )
+            for d in kept:
+                serial = d.get("serial")
+                if serial:
+                    allowed.add(serial)
+        return allowed
 
     def run(
         self,
@@ -65,12 +127,12 @@ class Engine:
     ) -> list[Finding]:
         all_orgs = self.client.organizations()
         if org_ids:
-            wanted = set(org_ids)
+            wanted = {str(x) for x in org_ids}
             orgs = [
                 o for o in all_orgs
-                if o.get("id") in wanted or o.get("name") in wanted
+                if str(o.get("id")) in wanted or o.get("name") in wanted
             ]
-            missing = wanted - {o.get("id") for o in orgs} - {o.get("name") for o in orgs}
+            missing = wanted - {str(o.get("id")) for o in orgs} - {o.get("name") for o in orgs if o.get("name")}
             if missing:
                 available = ", ".join(
                     f"{o.get('id')} ({o.get('name')})" for o in all_orgs
@@ -111,6 +173,8 @@ class Engine:
                 wanted_n = set(network_ids)
                 networks = [n for n in networks if n.get("id") in wanted_n]
 
+            allowed_serials = self._sampled_serials(org["id"]) if dev_checks else None
+
             for net in networks:
                 log.info("  network %s (%s)", net.get("name"), net.get("id"))
                 for chk in net_checks:
@@ -131,7 +195,9 @@ class Engine:
                     log.warning("network %s: cannot list devices: %s", net.get("name"), e)
                     continue
                 for dev in devices:
-                    dev_product = (dev.get("productType") or "").lower()
+                    if allowed_serials is not None and dev.get("serial") not in allowed_serials:
+                        continue
+                    dev_product = device_product_type(dev)
                     for chk in dev_checks:
                         if chk.meta.product_type and chk.meta.product_type != dev_product:
                             continue
