@@ -69,6 +69,7 @@ def render(findings: list[Finding]) -> None:
         table.add_column("Status", no_wrap=True)
         table.add_column("Target")
         table.add_column("Finding")
+        table.add_column("Controls")
         scope_order = {Scope.ORG: 0, Scope.NETWORK: 1, Scope.DEVICE: 2}
 
         def _target_sort_key(f: Finding):
@@ -97,6 +98,7 @@ def render(findings: list[Finding]) -> None:
                 Text(f.status.value, style=_STATUS_STYLE[f.status]),
                 f.target.label(),
                 f.message,
+                _format_controls(f),
             )
             prev_group = cur
         console.print(table)
@@ -151,3 +153,27 @@ def _priority(f: Finding) -> int:
     sev = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}.get(f.severity.value, 0)
     status_bump = 1 if f.status == Status.FAIL else 0
     return sev * 2 + status_bump
+
+
+# Compact framework labels for the Controls column.
+_FRAMEWORK_SHORT = {
+    "CIS": "CIS",
+    "CIS_CSC": "CSC",
+    "NIST_CSF": "NIST",
+    "Cisco": "Cisco",
+    "E8": "E8",
+    "ISM": "ISM",
+}
+
+
+def _format_controls(f: Finding) -> str:
+    if not f.mappings:
+        return "-"
+    parts: list[str] = []
+    for fw in ("CIS", "CIS_CSC", "NIST_CSF", "Cisco", "E8", "ISM"):
+        refs = f.mappings.get(fw)
+        if not refs:
+            continue
+        label = _FRAMEWORK_SHORT.get(fw, fw)
+        parts.append(f"{label}:{', '.join(refs)}")
+    return "\n".join(parts) if parts else "-"
