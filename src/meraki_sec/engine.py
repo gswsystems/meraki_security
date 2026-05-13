@@ -68,6 +68,28 @@ def _filter(
     return out
 
 
+def _normalize_mac(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _device_matches(device: dict, wanted: set[str]) -> bool:
+    """True if any of device.serial / device.name / device.mac is in `wanted`.
+
+    `wanted` should contain lowercased serials/names and MAC values already
+    normalized via _normalize_mac (so callers can match either format).
+    """
+    serial = (device.get("serial") or "").lower()
+    name = (device.get("name") or "").lower()
+    mac_norm = _normalize_mac(device.get("mac") or "")
+    if serial and serial in wanted:
+        return True
+    if name and name in wanted:
+        return True
+    if mac_norm and mac_norm in wanted:
+        return True
+    return False
+
+
 class Engine:
     def __init__(
         self,
@@ -78,6 +100,7 @@ class Engine:
         skip_checks: list[str] | None = None,
         device_sample_per_type: int | None = None,
         device_sample: dict[str, int] | None = None,
+        device_filter: list[str] | None = None,
     ):
         self.client = client
         self.thresholds = thresholds
@@ -85,6 +108,20 @@ class Engine:
         self.skip = skip_checks or []
         self.device_sample_per_type = device_sample_per_type
         self.device_sample = {k.lower(): v for k, v in (device_sample or {}).items()}
+        # Normalize device-filter entries so the device loop can compare cheaply.
+        # We keep the original spelling too, only to warn about unmatched lines.
+        self._device_filter_raw: list[str] = list(device_filter or [])
+        self._device_filter: set[str] = set()
+        for item in self._device_filter_raw:
+            s = item.strip()
+            if not s:
+                continue
+            self._device_filter.add(s.lower())
+            # Also store a MAC-normalized form so users can paste any MAC style.
+            mac_norm = _normalize_mac(s)
+            if mac_norm:
+                self._device_filter.add(mac_norm)
+        self._device_filter_seen: set[str] = set()
 
     def _sampled_serials(self, org_id: str) -> set[str] | None:
         """Build the set of device serials that should be scanned for this org.
@@ -197,6 +234,17 @@ class Engine:
                 for dev in devices:
                     if allowed_serials is not None and dev.get("serial") not in allowed_serials:
                         continue
+                    if self._device_filter:
+                        if not _device_matches(dev, self._device_filter):
+                            continue
+                        # Track which user inputs matched something, for diagnostics.
+                        for key in (
+                            (dev.get("serial") or "").lower(),
+                            (dev.get("name") or "").lower(),
+                            _normalize_mac(dev.get("mac") or ""),
+                        ):
+                            if key and key in self._device_filter:
+                                self._device_filter_seen.add(key)
                     dev_product = device_product_type(dev)
                     for chk in dev_checks:
                         if chk.meta.product_type and chk.meta.product_type != dev_product:
@@ -208,6 +256,21 @@ class Engine:
                             network=net,
                             device=dev,
                         )))
+
+        if self._device_filter:
+            unmatched = [
+                item for item in self._device_filter_raw
+                if item.strip()
+                and item.strip().lower() not in self._device_filter_seen
+                and _normalize_mac(item) not in self._device_filter_seen
+            ]
+            if unmatched:
+                log.warning(
+                    "device filter: %d entr%s did not match any device: %s",
+                    len(unmatched),
+                    "y" if len(unmatched) == 1 else "ies",
+                    ", ".join(unmatched),
+                )
 
         return findings
 

@@ -120,6 +120,38 @@ meraki-sec -c config.yaml --org-id 123456 --network-id L_987654321
 
 Both flags are repeatable. CLI scope overrides anything in `config.yaml`.
 
+### Scan a specific list of devices
+
+```bash
+meraki-sec -c config.yaml --devices my-devices.txt
+```
+
+`--devices` points to a text file with one device identifier per line. Each
+line is matched (case-insensitive) against the device's **serial**, **name**,
+or **MAC** — paste whichever you have handy. MACs match regardless of
+separator (`aa:bb:cc:11:22:33`, `aa-bb-cc-11-22-33`, and `aabbcc112233` are
+equivalent). Blank lines and lines starting with `#` are ignored.
+
+Example `my-devices.txt`:
+
+```text
+# Critical APs and edge switches
+Q2XX-AAAA-BBBB
+edge-switch-01
+aa:bb:cc:11:22:33
+```
+
+Behaviour:
+
+- Device-scope checks (e.g. `MS-003`, `MV-001`) run **only** on listed devices.
+- Org-scope and network-scope checks still run as normal against every org
+  and network in scope — `--devices` narrows the device sweep, not the rest.
+- Entries that do not match any device produce a warning at the end of the
+  run, which is handy for catching typos.
+- `--devices` composes with `--org-id` / `--network-id` (apply scope first,
+  then filter devices within scope) and with sampling flags (a device must
+  pass both filters to be scanned).
+
 ### Run a single check or a subset
 
 ```bash

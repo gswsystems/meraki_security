@@ -34,6 +34,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Sample at most N devices of each product type per org. Overrides config.")
     p.add_argument("--sample-type", action="append", default=[], metavar="TYPE=N",
                    help="Per-product-type sample limit, e.g. --sample-type wireless=10 (repeatable).")
+    p.add_argument("--devices", default=None, metavar="FILE",
+                   help="Path to a text file listing device serials, names, or MACs (one per line; "
+                        "'#' comments and blank lines ignored). Device-scope checks run only on listed devices.")
     p.add_argument("--list-checks", action="store_true", help="Print all known checks and exit.")
     p.add_argument("--device-overview", action="store_true",
                    help="Print device-type counts per organization and exit.")
@@ -61,6 +64,19 @@ def _list_checks() -> None:
         print(f"{m.id:8s} [{m.severity.value:8s}] {m.scope.value:12s} {m.product_type or '-':9s} {m.title}")
         for framework, refs in m.mappings.items():
             print(f"           {framework}: {', '.join(refs)}")
+
+
+def _load_device_list(path: str) -> list[str]:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"device list file not found: {p}")
+    out: list[str] = []
+    for line in p.read_text().splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        out.append(s)
+    return out
 
 
 def _parse_sample_types(items: list[str]) -> dict[str, int]:
@@ -158,6 +174,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    device_filter: list[str] = []
+    if args.devices:
+        try:
+            device_filter = _load_device_list(args.devices)
+        except FileNotFoundError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        if not device_filter:
+            print(f"error: device list is empty: {args.devices}", file=sys.stderr)
+            return 2
+
     # CLI flags override config.
     org_ids = args.org_id or cfg.organizations
     network_ids = args.network_id or cfg.networks
@@ -187,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_checks=skip,
         device_sample_per_type=sample_per_type,
         device_sample=sample_map,
+        device_filter=device_filter,
     )
 
     findings = engine.run(org_ids=org_ids or None, network_ids=network_ids or None)
