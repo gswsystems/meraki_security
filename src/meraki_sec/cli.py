@@ -38,6 +38,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Path to a text file listing device serials, names, or MACs (one per line; "
                         "'#' comments and blank lines ignored). Device-scope checks run only on listed devices.")
     p.add_argument("--list-checks", action="store_true", help="Print all known checks and exit.")
+    p.add_argument("--list-networks", action="store_true",
+                   help="Print networks (id, name, product types, tags) per organization and exit.")
     p.add_argument("--device-overview", action="store_true",
                    help="Print device-type counts per organization and exit.")
     p.add_argument("-v", "--verbose", action="count", default=0, help="-v for INFO, -vv for DEBUG.")
@@ -55,6 +57,11 @@ def _configure_logging(verbosity: int) -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Silence third-party HTTP plumbing at DEBUG — urllib3 emits one
+    # `"GET ... HTTP/1.1" 200 None` line per request, which drowns out our
+    # own logs and confuses output ("None" is the content-length, not the body).
+    for noisy in ("urllib3", "urllib3.connectionpool", "requests", "charset_normalizer"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def _list_checks() -> None:
@@ -92,18 +99,64 @@ def _parse_sample_types(items: list[str]) -> dict[str, int]:
     return out
 
 
+def _resolve_orgs(client: MerakiClient, org_filters: list[str]) -> list[dict]:
+    all_orgs = client.organizations()
+    if not org_filters:
+        return all_orgs
+    wanted = {str(x) for x in org_filters}
+    return [o for o in all_orgs if str(o.get("id")) in wanted or o.get("name") in wanted]
+
+
+def _show_network_list(client: MerakiClient, org_filters: list[str]) -> None:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    orgs = _resolve_orgs(client, org_filters)
+    if not orgs:
+        console.print("[yellow]No organizations resolved.[/yellow]")
+        return
+
+    grand_total = 0
+    for org in orgs:
+        try:
+            nets = client.networks(org["id"])
+        except Exception as e:
+            console.print(f"[red]Failed to load networks for {org.get('name')}: {e}[/red]")
+            continue
+
+        table = Table(
+            title=f"Networks: {org.get('name')} ({org.get('id')}) — {len(nets)} total",
+            header_style="bold",
+        )
+        table.add_column("Network ID", no_wrap=True)
+        table.add_column("Name")
+        table.add_column("Product types")
+        table.add_column("Tags")
+        table.add_column("Time zone")
+        for n in sorted(nets, key=lambda x: (x.get("name") or "").lower()):
+            ptypes = ", ".join(n.get("productTypes") or []) or "-"
+            tags = ", ".join(n.get("tags") or []) or "-"
+            table.add_row(
+                n.get("id") or "-",
+                n.get("name") or "-",
+                ptypes,
+                tags,
+                n.get("timeZone") or "-",
+            )
+        console.print(table)
+        grand_total += len(nets)
+
+    if len(orgs) > 1:
+        console.print(f"[dim]Total networks across selected orgs: {grand_total}[/dim]")
+
+
 def _show_device_overview(client: MerakiClient, org_filters: list[str]) -> None:
     from rich.console import Console
     from rich.table import Table
 
     console = Console()
-    all_orgs = client.organizations()
-    if org_filters:
-        wanted = {str(x) for x in org_filters}
-        orgs = [o for o in all_orgs if str(o.get("id")) in wanted or o.get("name") in wanted]
-    else:
-        orgs = all_orgs
-
+    orgs = _resolve_orgs(client, org_filters)
     if not orgs:
         console.print("[yellow]No organizations resolved.[/yellow]")
         return
@@ -202,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
         timeout=cfg.meraki.timeout,
         max_requests_per_second=rate_limit,
     )
+
+    if args.list_networks:
+        _show_network_list(client, org_ids)
+        return 0
 
     if args.device_overview:
         _show_device_overview(client, org_ids)
