@@ -125,8 +125,12 @@ def _show_network_list(client: MerakiClient, org_filters: list[str]) -> None:
             console.print(f"[red]Failed to load networks for {org.get('name')}: {e}[/red]")
             continue
 
+        console.print(
+            f"\n[bold]Organization:[/bold] {org.get('name')}  "
+            f"[dim]id=[/dim][cyan]{org.get('id')}[/cyan]"
+        )
         table = Table(
-            title=f"Networks: {org.get('name')} ({org.get('id')}) — {len(nets)} total",
+            title=f"Networks ({len(nets)} total)",
             header_style="bold",
         )
         table.add_column("Network ID", no_wrap=True)
@@ -175,8 +179,12 @@ def _show_device_overview(client: MerakiClient, org_filters: list[str]) -> None:
             counts[ptype] += 1
             grand_totals[ptype] += 1
 
+        console.print(
+            f"\n[bold]Organization:[/bold] {org.get('name')}  "
+            f"[dim]id=[/dim][cyan]{org.get('id')}[/cyan]"
+        )
         table = Table(
-            title=f"Device overview: {org.get('name')} ({org.get('id')})",
+            title="Device overview",
             header_style="bold",
         )
         table.add_column("Product type")
