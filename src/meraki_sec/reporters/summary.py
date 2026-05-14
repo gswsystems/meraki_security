@@ -1,8 +1,41 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 from meraki_sec.models import Finding, SEVERITY_WEIGHT, Status
+
+
+def report_scope_slug(findings: list[Finding]) -> str:
+    """Filename-safe slug describing what the report covers.
+
+    Picks the network name when the run is scoped to a single network, the org
+    name when scoped to a single org, else returns "" (timestamp-only file).
+    """
+    if not findings:
+        return ""
+    networks = {
+        (f.target.network_id, f.target.network_name)
+        for f in findings
+        if f.target.network_id
+    }
+    if len(networks) == 1:
+        _, name = next(iter(networks))
+        return _slugify(name or "")
+    orgs = {
+        (f.target.org_id, f.target.org_name)
+        for f in findings
+        if f.target.org_id
+    }
+    if len(orgs) == 1:
+        _, name = next(iter(orgs))
+        return _slugify(name or "")
+    return ""
+
+
+def _slugify(s: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9]+", "-", s.strip())
+    return s.strip("-").lower()
 
 
 def compute_summary(findings: list[Finding]) -> dict:

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from meraki_sec.models import Finding
+from meraki_sec.reporters.summary import report_scope_slug
 
 
 _HEADERS = [
@@ -22,7 +23,9 @@ _HEADERS = [
 def write(findings: list[Finding], out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = out_dir / f"meraki-sec-{stamp}.csv"
+    slug = report_scope_slug(findings)
+    name = f"meraki-sec-{slug}-{stamp}.csv" if slug else f"meraki-sec-{stamp}.csv"
+    path = out_dir / name
     with path.open("w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(_HEADERS)
