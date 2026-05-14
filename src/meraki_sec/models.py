@@ -51,8 +51,9 @@ class Target:
 
     def label(self) -> str:
         parts: list[str] = []
-        if self.org_name:
-            parts.append(f"org={self.org_name}")
+        if self.org_name or self.org_id:
+            name = self.org_name or "?"
+            parts.append(f"org={name} [{self.org_id}]" if self.org_id else f"org={name}")
         if self.network_name:
             parts.append(f"net={self.network_name}")
         if self.device_name or self.device_serial:
