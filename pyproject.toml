@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 meraki-sec = "meraki_sec.cli:main"
+meraki-sec-render = "meraki_sec.render_reports:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

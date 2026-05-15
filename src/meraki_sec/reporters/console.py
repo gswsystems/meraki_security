@@ -29,8 +29,8 @@ _STATUS_STYLE = {
 }
 
 
-def render(findings: list[Finding]) -> None:
-    console = Console()
+def render(findings: list[Finding], *, console: Console | None = None) -> None:
+    console = console or Console()
     summary = compute_summary(findings)
 
     header = Text()
