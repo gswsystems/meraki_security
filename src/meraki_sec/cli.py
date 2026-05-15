@@ -42,6 +42,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Print networks (id, name, product types, tags) per organization and exit.")
     p.add_argument("--device-overview", action="store_true",
                    help="Print device-type counts per organization and exit.")
+    p.add_argument("--list-output", default=None, metavar="FILE",
+                   help="For --list-networks / --device-overview, write the rendered tables to "
+                        "FILE instead of stdout. Format inferred from extension: .html -> HTML, "
+                        "anything else -> plain text.")
     p.add_argument("-v", "--verbose", action="count", default=0, help="-v for INFO, -vv for DEBUG.")
     p.add_argument("--version", action="version", version=f"meraki-sec {__version__}")
     return p
@@ -99,6 +103,31 @@ def _parse_sample_types(items: list[str]) -> dict[str, int]:
     return out
 
 
+def _emit_list_mode(render_fn, output: str | None) -> None:
+    """Run a list-mode renderer (network list / device overview).
+
+    Without `output`, prints directly to the terminal. With `output`, records
+    into a buffer and writes a self-contained HTML page (when the file ends in
+    `.html`) or plain text.
+    """
+    from rich.console import Console
+
+    if output is None:
+        render_fn(Console())
+        return
+
+    import io
+    console = Console(record=True, width=200, file=io.StringIO())
+    render_fn(console)
+
+    out_path = Path(output)
+    if out_path.suffix.lower() == ".html":
+        out_path.write_text(console.export_html(clear=False, inline_styles=True))
+    else:
+        out_path.write_text(console.export_text(clear=False))
+    print(f"wrote {out_path}", file=sys.stderr)
+
+
 def _resolve_orgs(client: MerakiClient, org_filters: list[str]) -> list[dict]:
     all_orgs = client.organizations()
     if not org_filters:
@@ -107,11 +136,16 @@ def _resolve_orgs(client: MerakiClient, org_filters: list[str]) -> list[dict]:
     return [o for o in all_orgs if str(o.get("id")) in wanted or o.get("name") in wanted]
 
 
-def _show_network_list(client: MerakiClient, org_filters: list[str]) -> None:
+def _show_network_list(
+    client: MerakiClient,
+    org_filters: list[str],
+    *,
+    console: "Console | None" = None,
+) -> None:
     from rich.console import Console
     from rich.table import Table
 
-    console = Console()
+    console = console or Console()
     orgs = _resolve_orgs(client, org_filters)
     if not orgs:
         console.print("[yellow]No organizations resolved.[/yellow]")
@@ -155,11 +189,16 @@ def _show_network_list(client: MerakiClient, org_filters: list[str]) -> None:
         console.print(f"[dim]Total networks across selected orgs: {grand_total}[/dim]")
 
 
-def _show_device_overview(client: MerakiClient, org_filters: list[str]) -> None:
+def _show_device_overview(
+    client: MerakiClient,
+    org_filters: list[str],
+    *,
+    console: "Console | None" = None,
+) -> None:
     from rich.console import Console
     from rich.table import Table
 
-    console = Console()
+    console = console or Console()
     orgs = _resolve_orgs(client, org_filters)
     if not orgs:
         console.print("[yellow]No organizations resolved.[/yellow]")
@@ -265,11 +304,11 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.list_networks:
-        _show_network_list(client, org_ids)
+        _emit_list_mode(lambda c: _show_network_list(client, org_ids, console=c), args.list_output)
         return 0
 
     if args.device_overview:
-        _show_device_overview(client, org_ids)
+        _emit_list_mode(lambda c: _show_device_overview(client, org_ids, console=c), args.list_output)
         return 0
 
     engine = Engine(
