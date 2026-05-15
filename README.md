@@ -80,9 +80,56 @@ meraki-sec -c config.yaml --format console
 meraki-sec --list-checks
 ```
 
-Reports are timestamped and written to `./reports/` by default:
-`reports/meraki-sec-YYYYMMDDTHHMMSSZ.json`
-`reports/meraki-sec-YYYYMMDDTHHMMSSZ.csv`
+### Discover what's there
+
+Before scanning, you can list the orgs, networks, and device mix the API key
+can see — handy when an org is split across many networks and you want to
+scan a specific one.
+
+```bash
+# list every network in an org (id, name, product types, tags, time zone)
+meraki-sec --list-networks --org-id 123456
+
+# device-type counts per org
+meraki-sec --device-overview --org-id 123456
+```
+
+Both print the org id and name on a header line above each table so the ids
+are easy to copy into `--network-id` for a follow-up scan.
+
+### Reports
+
+Reports are timestamped and written to `./reports/` by default. When the run
+is scoped to a single network or org, the name is included in the filename so
+per-network reports aren't confusing to tell apart:
+
+```
+reports/meraki-sec-hq-network-YYYYMMDDTHHMMSSZ.json   # scoped to one network
+reports/meraki-sec-acme-YYYYMMDDTHHMMSSZ.json         # scoped to one org
+reports/meraki-sec-YYYYMMDDTHHMMSSZ.json              # multi-org scan
+```
+
+### Re-render saved JSON reports
+
+If you've gathered reports network-by-network and want one combined readout
+without re-scanning, `meraki-sec-render` re-renders the JSON in the same
+layout as the live console output:
+
+```bash
+# combine every JSON in a directory; write plain text to stdout
+meraki-sec-render reports/
+
+# write to a file
+meraki-sec-render reports/ -o combined.txt
+
+# self-contained HTML (portable; opens in any browser on any OS)
+meraki-sec-render reports/ --html -o combined.html
+
+# ANSI-coloured text (best viewed in a terminal: `less -R combined.ansi`)
+meraki-sec-render reports/ --ansi > combined.ansi
+```
+
+`--ansi` and `--html` are mutually exclusive; plain text is the default.
 
 ## Exit codes
 
@@ -103,6 +150,7 @@ src/meraki_sec/
   client.py           # Dashboard SDK wrapper (rate-limited, cached)
   engine.py           # iterates orgs/networks/devices, runs checks
   models.py           # Finding / Target / enums / framework labels
+  render_reports.py   # meraki-sec-render: re-render saved JSON as text/HTML
   checks/
     base.py           # @check decorator + REGISTRY
     organization.py   # ORG-001 … ORG-010
