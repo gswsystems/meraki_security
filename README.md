@@ -92,10 +92,16 @@ meraki-sec --list-networks --org-id 123456
 
 # device-type counts per org
 meraki-sec --device-overview --org-id 123456
+
+# write the listing to a file instead of the terminal
+meraki-sec --list-networks --org-id 123456 --list-output networks.html
+meraki-sec --list-networks --org-id 123456 --list-output networks.txt
 ```
 
 Both print the org id and name on a header line above each table so the ids
-are easy to copy into `--network-id` for a follow-up scan.
+are easy to copy into `--network-id` for a follow-up scan. `--list-output`
+infers the format from the file extension: `.html` produces a self-contained
+HTML page (portable; opens in any browser), anything else is plain text.
 
 ### Reports
 
